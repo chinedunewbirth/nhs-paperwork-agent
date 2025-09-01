@@ -341,7 +341,7 @@ docker-compose up --build
 
 For questions, issues, or collaboration opportunities:
 
-- 📧 **Email**: [Your contact email]
+- 📧 **Email**: [Chinedumazigtv@gmail.com]
 - 💬 **Issues**: [GitHub Issues URL]
 - 📚 **Documentation**: [Documentation URL]
 
