@@ -348,3 +348,7 @@ For questions, issues, or collaboration opportunities:
 ---
 
 **Built with ❤️ for NHS healthcare professionals**
+
+Complete project work
+
+<img width="2880" height="1518" alt="image" src="https://github.com/user-attachments/assets/c73723b1-3c6a-4a49-a6aa-c5338262ff22" />
