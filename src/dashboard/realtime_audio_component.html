@@ -1,0 +1,599 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Real-time Audio Recorder</title>
+    <style>
+        .audio-recorder {
+            padding: 20px;
+            border: 2px solid #ddd;
+            border-radius: 10px;
+            background-color: #f9f9f9;
+            max-width: 600px;
+            margin: 0 auto;
+        }
+        
+        .recording-controls {
+            display: flex;
+            gap: 10px;
+            justify-content: center;
+            margin: 20px 0;
+        }
+        
+        .record-button {
+            padding: 12px 24px;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 16px;
+            font-weight: bold;
+            transition: all 0.3s ease;
+        }
+        
+        .record-button.start {
+            background-color: #ff4444;
+            color: white;
+        }
+        
+        .record-button.start:hover {
+            background-color: #cc3333;
+        }
+        
+        .record-button.stop {
+            background-color: #44aa44;
+            color: white;
+        }
+        
+        .record-button.stop:hover {
+            background-color: #339933;
+        }
+        
+        .record-button:disabled {
+            background-color: #cccccc;
+            cursor: not-allowed;
+        }
+        
+        .status-indicator {
+            text-align: center;
+            margin: 15px 0;
+            padding: 10px;
+            border-radius: 5px;
+        }
+        
+        .status-recording {
+            background-color: #ffe6e6;
+            color: #cc0000;
+            border: 1px solid #ffcccc;
+        }
+        
+        .status-idle {
+            background-color: #e6f3ff;
+            color: #0066cc;
+            border: 1px solid #ccddff;
+        }
+        
+        .status-processing {
+            background-color: #fff3e6;
+            color: #cc6600;
+            border: 1px solid #ffddcc;
+        }
+        
+        .transcription-area {
+            margin-top: 20px;
+        }
+        
+        .transcription-text {
+            width: 100%;
+            min-height: 200px;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            font-family: monospace;
+            background-color: white;
+            resize: vertical;
+        }
+        
+        .live-transcription {
+            background-color: #f0f8ff;
+            border: 1px solid #add8e6;
+            padding: 10px;
+            border-radius: 5px;
+            margin: 10px 0;
+            min-height: 100px;
+            max-height: 300px;
+            overflow-y: auto;
+        }
+        
+        .transcription-segment {
+            padding: 5px 0;
+            border-bottom: 1px solid #eee;
+        }
+        
+        .segment-timestamp {
+            font-size: 12px;
+            color: #666;
+        }
+        
+        .segment-text {
+            margin-top: 5px;
+            font-weight: 500;
+        }
+        
+        .audio-visualizer {
+            text-align: center;
+            margin: 15px 0;
+        }
+        
+        .volume-bar {
+            display: inline-block;
+            width: 4px;
+            margin: 0 1px;
+            background-color: #ddd;
+            border-radius: 2px;
+            transition: height 0.1s ease;
+        }
+        
+        .error-message {
+            background-color: #ffe6e6;
+            color: #cc0000;
+            padding: 10px;
+            border-radius: 5px;
+            margin: 10px 0;
+            border: 1px solid #ffcccc;
+        }
+        
+        .success-message {
+            background-color: #e6ffe6;
+            color: #006600;
+            padding: 10px;
+            border-radius: 5px;
+            margin: 10px 0;
+            border: 1px solid #ccffcc;
+        }
+    </style>
+</head>
+<body>
+    <div class="audio-recorder">
+        <h3>🎙️ Real-time Clinical Notes Recording</h3>
+        
+        <div class="recording-controls">
+            <button id="startBtn" class="record-button start" onclick="startRecording()">
+                🎤 Start Recording
+            </button>
+            <button id="stopBtn" class="record-button stop" onclick="stopRecording()" disabled>
+                ⏹️ Stop Recording
+            </button>
+            <button id="clearBtn" class="record-button" onclick="clearTranscription()">
+                🗑️ Clear
+            </button>
+        </div>
+        
+        <div id="statusIndicator" class="status-indicator status-idle">
+            Ready to record clinical notes
+        </div>
+        
+        <div class="audio-visualizer" id="audioVisualizer" style="display: none;">
+            <div>Audio Level:</div>
+            <div id="volumeBars"></div>
+        </div>
+        
+        <div class="transcription-area">
+            <h4>Live Transcription:</h4>
+            <div id="liveTranscription" class="live-transcription">
+                <em>Transcription will appear here as you speak...</em>
+            </div>
+            
+            <h4>Complete Transcription:</h4>
+            <textarea id="fullTranscription" class="transcription-text" 
+                placeholder="Complete transcribed text will accumulate here..."></textarea>
+        </div>
+        
+        <div id="messageArea"></div>
+    </div>
+
+    <script>
+        let mediaRecorder = null;
+        let audioChunks = [];
+        let websocket = null;
+        let sessionId = null;
+        let isRecording = false;
+        let audioContext = null;
+        let analyser = null;
+        let microphone = null;
+        let dataArray = null;
+        let animationId = null;
+
+        const API_BASE_URL = 'http://localhost:8000';
+        
+        // UI Elements
+        const startBtn = document.getElementById('startBtn');
+        const stopBtn = document.getElementById('stopBtn');
+        const clearBtn = document.getElementById('clearBtn');
+        const statusIndicator = document.getElementById('statusIndicator');
+        const liveTranscription = document.getElementById('liveTranscription');
+        const fullTranscription = document.getElementById('fullTranscription');
+        const messageArea = document.getElementById('messageArea');
+        const audioVisualizer = document.getElementById('audioVisualizer');
+        const volumeBars = document.getElementById('volumeBars');
+
+        // Initialize audio visualizer bars
+        function initializeVisualizer() {
+            volumeBars.innerHTML = '';
+            for (let i = 0; i < 32; i++) {
+                const bar = document.createElement('div');
+                bar.className = 'volume-bar';
+                bar.style.height = '10px';
+                volumeBars.appendChild(bar);
+            }
+        }
+
+        // Update audio visualizer
+        function updateVisualizer() {
+            if (!analyser || !dataArray) return;
+            
+            analyser.getByteFrequencyData(dataArray);
+            
+            const bars = volumeBars.querySelectorAll('.volume-bar');
+            const step = Math.floor(dataArray.length / bars.length);
+            
+            for (let i = 0; i < bars.length; i++) {
+                const value = dataArray[i * step];
+                const height = Math.max(10, (value / 255) * 60);
+                bars[i].style.height = height + 'px';
+                bars[i].style.backgroundColor = value > 100 ? '#ff4444' : '#4444ff';
+            }
+            
+            if (isRecording) {
+                animationId = requestAnimationFrame(updateVisualizer);
+            }
+        }
+
+        // Create audio session
+        async function createAudioSession() {
+            try {
+                const response = await fetch(`${API_BASE_URL}/audio/session`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    }
+                });
+                
+                if (response.ok) {
+                    const data = await response.json();
+                    sessionId = data.session_id;
+                    showMessage(`Session created: ${sessionId}`, 'success');
+                    return true;
+                } else {
+                    showMessage('Failed to create audio session', 'error');
+                    return false;
+                }
+            } catch (error) {
+                showMessage(`Error creating session: ${error.message}`, 'error');
+                return false;
+            }
+        }
+
+        // Connect WebSocket
+        function connectWebSocket() {
+            if (!sessionId) return false;
+            
+            try {
+                const wsUrl = `ws://localhost:8000/ws/audio/${sessionId}`;
+                websocket = new WebSocket(wsUrl);
+                
+                websocket.onopen = function(event) {
+                    showMessage('Connected to real-time transcription service', 'success');
+                };
+                
+                websocket.onmessage = function(event) {
+                    handleWebSocketMessage(JSON.parse(event.data));
+                };
+                
+                websocket.onclose = function(event) {
+                    showMessage('WebSocket connection closed', 'info');
+                };
+                
+                websocket.onerror = function(error) {
+                    showMessage(`WebSocket error: ${error}`, 'error');
+                };
+                
+                return true;
+            } catch (error) {
+                showMessage(`WebSocket connection failed: ${error.message}`, 'error');
+                return false;
+            }
+        }
+
+        // Handle WebSocket messages
+        function handleWebSocketMessage(data) {
+            switch (data.type) {
+                case 'connection_established':
+                    showMessage('Real-time transcription ready', 'success');
+                    break;
+                
+                case 'transcription_update':
+                    updateLiveTranscription(data.data);
+                    break;
+                
+                case 'audio_processed':
+                    // Handle audio processing confirmation
+                    console.log('Audio processed:', data.result);
+                    break;
+                
+                case 'recording_started':
+                    updateStatus('Recording started', 'recording');
+                    break;
+                
+                case 'recording_stopped':
+                    updateStatus('Recording stopped', 'idle');
+                    break;
+                
+                case 'error':
+                    showMessage(`Error: ${data.message}`, 'error');
+                    break;
+                
+                default:
+                    console.log('Unknown message type:', data.type);
+            }
+        }
+
+        // Update live transcription display
+        function updateLiveTranscription(transcriptionData) {
+            if (transcriptionData.new_segments && transcriptionData.new_segments.length > 0) {
+                // Add new segments to live transcription
+                transcriptionData.new_segments.forEach(segment => {
+                    addTranscriptionSegment(segment);
+                });
+                
+                // Update full transcription
+                fullTranscription.value = transcriptionData.full_transcription;
+            }
+        }
+
+        // Add transcription segment to display
+        function addTranscriptionSegment(segment) {
+            const segmentDiv = document.createElement('div');
+            segmentDiv.className = 'transcription-segment';
+            
+            const timestamp = new Date(segment.timestamp).toLocaleTimeString();
+            
+            segmentDiv.innerHTML = `
+                <div class="segment-timestamp">${timestamp} (${(segment.confidence * 100).toFixed(1)}% confidence)</div>
+                <div class="segment-text">${segment.text}</div>
+            `;
+            
+            liveTranscription.appendChild(segmentDiv);
+            liveTranscription.scrollTop = liveTranscription.scrollHeight;
+        }
+
+        // Start recording
+        async function startRecording() {
+            try {
+                // Create session if needed
+                if (!sessionId) {
+                    const sessionCreated = await createAudioSession();
+                    if (!sessionCreated) return;
+                }
+                
+                // Connect WebSocket if needed
+                if (!websocket || websocket.readyState !== WebSocket.OPEN) {
+                    const wsConnected = connectWebSocket();
+                    if (!wsConnected) return;
+                    
+                    // Wait a bit for connection
+                    await new Promise(resolve => setTimeout(resolve, 1000));
+                }
+                
+                // Get microphone access
+                const stream = await navigator.mediaDevices.getUserMedia({ 
+                    audio: {
+                        sampleRate: 16000,
+                        channelCount: 1,
+                        echoCancellation: true,
+                        noiseSuppression: true
+                    } 
+                });
+                
+                // Set up audio context for visualization
+                audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                analyser = audioContext.createAnalyser();
+                microphone = audioContext.createMediaStreamSource(stream);
+                microphone.connect(analyser);
+                
+                analyser.fftSize = 256;
+                const bufferLength = analyser.frequencyBinCount;
+                dataArray = new Uint8Array(bufferLength);
+                
+                // Show visualizer
+                audioVisualizer.style.display = 'block';
+                initializeVisualizer();
+                updateVisualizer();
+                
+                // Set up MediaRecorder for streaming
+                mediaRecorder = new MediaRecorder(stream, {
+                    mimeType: 'audio/webm;codecs=opus'
+                });
+                
+                mediaRecorder.ondataavailable = function(event) {
+                    if (event.data.size > 0 && websocket && websocket.readyState === WebSocket.OPEN) {
+                        // Convert blob to base64 and send via WebSocket
+                        const reader = new FileReader();
+                        reader.onload = function() {
+                            const arrayBuffer = reader.result;
+                            const uint8Array = new Uint8Array(arrayBuffer);
+                            const base64 = btoa(String.fromCharCode.apply(null, uint8Array));
+                            
+                            websocket.send(JSON.stringify({
+                                type: 'audio_chunk',
+                                audio_data: base64,
+                                timestamp: new Date().toISOString(),
+                                session_id: sessionId
+                            }));
+                        };
+                        reader.readAsArrayBuffer(event.data);
+                    }
+                };
+                
+                mediaRecorder.onerror = function(event) {
+                    showMessage(`Recording error: ${event.error}`, 'error');
+                };
+                
+                // Start recording
+                mediaRecorder.start(1000); // Send data every 1 second
+                isRecording = true;
+                
+                // Update UI
+                startBtn.disabled = true;
+                stopBtn.disabled = false;
+                updateStatus('🎤 Recording in progress...', 'recording');
+                
+                // Send start recording message
+                if (websocket && websocket.readyState === WebSocket.OPEN) {
+                    websocket.send(JSON.stringify({
+                        action: 'start_recording',
+                        session_id: sessionId
+                    }));
+                }
+                
+            } catch (error) {
+                showMessage(`Error starting recording: ${error.message}`, 'error');
+                resetRecordingState();
+            }
+        }
+
+        // Stop recording
+        async function stopRecording() {
+            try {
+                if (mediaRecorder && mediaRecorder.state === 'recording') {
+                    mediaRecorder.stop();
+                }
+                
+                if (microphone) {
+                    microphone.disconnect();
+                }
+                
+                if (audioContext) {
+                    audioContext.close();
+                }
+                
+                if (animationId) {
+                    cancelAnimationFrame(animationId);
+                }
+                
+                isRecording = false;
+                
+                // Hide visualizer
+                audioVisualizer.style.display = 'none';
+                
+                // Send stop recording message
+                if (websocket && websocket.readyState === WebSocket.OPEN) {
+                    websocket.send(JSON.stringify({
+                        action: 'stop_recording',
+                        session_id: sessionId
+                    }));
+                }
+                
+                // Update UI
+                updateStatus('⏹️ Recording stopped. Processing final transcription...', 'processing');
+                
+                // Wait for final transcription
+                setTimeout(() => {
+                    updateStatus('✅ Recording complete', 'idle');
+                    resetRecordingState();
+                }, 2000);
+                
+            } catch (error) {
+                showMessage(`Error stopping recording: ${error.message}`, 'error');
+                resetRecordingState();
+            }
+        }
+
+        // Clear transcription
+        function clearTranscription() {
+            liveTranscription.innerHTML = '<em>Transcription will appear here as you speak...</em>';
+            fullTranscription.value = '';
+            clearMessages();
+            
+            if (sessionId) {
+                // Create new session
+                createAudioSession();
+            }
+        }
+
+        // Reset recording state
+        function resetRecordingState() {
+            startBtn.disabled = false;
+            stopBtn.disabled = true;
+            isRecording = false;
+            
+            // Stop all media streams
+            if (mediaRecorder && mediaRecorder.stream) {
+                mediaRecorder.stream.getTracks().forEach(track => track.stop());
+            }
+        }
+
+        // Update status indicator
+        function updateStatus(message, type) {
+            statusIndicator.textContent = message;
+            statusIndicator.className = `status-indicator status-${type}`;
+        }
+
+        // Show message
+        function showMessage(message, type = 'info') {
+            const messageDiv = document.createElement('div');
+            messageDiv.className = `${type}-message`;
+            messageDiv.textContent = message;
+            
+            messageArea.appendChild(messageDiv);
+            
+            // Auto-remove after 5 seconds
+            setTimeout(() => {
+                if (messageDiv.parentNode) {
+                    messageDiv.parentNode.removeChild(messageDiv);
+                }
+            }, 5000);
+        }
+
+        // Clear messages
+        function clearMessages() {
+            messageArea.innerHTML = '';
+        }
+
+        // Get transcription data for external use
+        function getTranscriptionData() {
+            return {
+                sessionId: sessionId,
+                fullTranscription: fullTranscription.value,
+                isRecording: isRecording
+            };
+        }
+
+        // Initialize component
+        document.addEventListener('DOMContentLoaded', function() {
+            // Check for microphone support
+            if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+                showMessage('Microphone access not supported in this browser', 'error');
+                startBtn.disabled = true;
+            }
+            
+            // Check for WebSocket support
+            if (!window.WebSocket) {
+                showMessage('WebSocket not supported in this browser', 'error');
+                startBtn.disabled = true;
+            }
+            
+            updateStatus('Ready to record clinical notes', 'idle');
+        });
+
+        // Make functions available to parent window
+        window.realtimeAudioRecorder = {
+            start: startRecording,
+            stop: stopRecording,
+            clear: clearTranscription,
+            getTranscription: getTranscriptionData,
+            isRecording: () => isRecording
+        };
+    </script>
+</body>
+</html>
